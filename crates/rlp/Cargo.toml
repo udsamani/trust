@@ -1,0 +1,12 @@
+[package]
+name = "trust-rlp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bytes.workspace = true
+hex-literal.workspace = true
+auto_impl = "1"
