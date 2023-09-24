@@ -1,16 +1,44 @@
 [workspace]
 members = [
+  "bin/trust",
   "crates/ecies",
 ]
+default-members = ["bin/trust"]
+resolver = "2"
 
 [workspace.package]
 version = "0.0.1"
 edition = "2021"
-rust-versio = "1.70"
+rust-version = "1.70"
 license = "MIT"
 repository = "https://github.com/udsamani/trust"
 exclude = [".github/"]
 
 
 [workspace.dependencies]
+## Tokio
+tokio-stream = "0.1.11"
+tokio = { version = "1.21", default-features = false }
+tokio-util = { version = "0.7.4", features = ["codec"] }
+
+## Async
+futures = "0.3.26"
+futures-util = "0.3.25"
+
+
+## Crypto
+secp256k1 = { version = "0.27.0", default-features = false, features = [
+    "global-context",
+    "rand-std",
+    "recovery",
+] }
+ethereum-types = "0.14.1"
+
+## Miscellaneous
+thiserror = "1.0"
+rand = "0.8.5"
+bytes = "1.5.0"
+fixed-hash = { version = "0.8", default-features = false, features = ["rustc-hex"] }
+
+## Config
 toml = "0.7"
