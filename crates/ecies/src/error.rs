@@ -24,9 +24,25 @@ pub enum ECIESError {
     #[error(transparent)]
     RLPDecoding(trust_rlp::RlpDecodeError),
 
+    /// Tag Check Failed
+    #[error("Tag Check Failed")]
+    TagCheckBodyFailed,
+
+    /// Error when checking the HMAC tag against the tag on the header
+    #[error("tag check failure in read_header")]
+    TagCheckHeaderFailed,
+
+    /// Error when converting to integer
+    #[error(transparent)]
+    FromInt(std::num::TryFromIntError),
+
     /// Error when parsing AUTH data
     #[error("invalid auth data")]
     InvalidAuthData,
+
+    /// Error when reading the header if its length is <3
+    #[error("invalid body data")]
+    InvalidHeader,
 
     /// Error when parsing ACK data
     #[error("invalid ack data")]
@@ -52,5 +68,11 @@ impl From<std::io::Error> for ECIESError {
 impl From<trust_rlp::RlpDecodeError> for ECIESError {
     fn from(source: trust_rlp::RlpDecodeError) -> Self {
         ECIESError::RLPDecoding(source).into()
+    }
+}
+
+impl From<std::num::TryFromIntError> for ECIESError {
+    fn from(source: std::num::TryFromIntError) -> Self {
+        ECIESError::FromInt(source).into()
     }
 }

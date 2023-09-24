@@ -16,6 +16,12 @@ bytes.workspace = true
 educe = "0.4.19"
 ethereum-types.workspace = true
 trust-rlp.workspace = true
+block-padding = "0.3.2"
+
+##HeaderBytes
+generic-array = "0.14.6"
+typenum = "1.15.0"
+byteorder = "1.4.3"
 
 ## Crypto
 secp256k1 = { workspace = true, features = ["global-context", "rand-std", "recovery"]}
@@ -25,3 +31,4 @@ ctr = "0.9.2"
 hmac = "0.12.1"
 sha2 = "0.10.6"
 sha3 = "0.10.5"
+cipher = { version = "0.4.3", features = ["block-padding"] }

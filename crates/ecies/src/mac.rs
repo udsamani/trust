@@ -1,11 +1,19 @@
-use ethereum_types::H256;
+use aes::Aes256Enc;
+use block_padding::NoPadding;
+use cipher::BlockEncrypt;
+use digest::KeyInit;
+use ethereum_types::{H128, H256};
+use generic_array::GenericArray;
 use sha3::{Digest, Keccak256};
+use typenum::U16;
 
 #[derive(Debug)]
 pub struct MAC {
     secret: H256,
     hasher: Keccak256,
 }
+
+pub type HeaderBytes = GenericArray<u8, U16>;
 
 impl MAC {
     pub fn update(&mut self, data: &[u8]) {
@@ -14,5 +22,36 @@ impl MAC {
 
     pub fn new(secret: H256) -> Self {
         Self { secret, hasher: Keccak256::new() }
+    }
+
+    pub fn update_header(&mut self, data: &HeaderBytes) {
+        let aes = Aes256Enc::new_from_slice(self.secret.as_ref()).unwrap();
+        let mut encrypted = self.digest().to_fixed_bytes();
+
+        aes.encrypt_padded::<NoPadding>(&mut encrypted, H128::len_bytes()).unwrap();
+        for i in 0..data.len() {
+            encrypted[i] ^= data[i];
+        }
+        self.hasher.update(encrypted);
+    }
+
+    /// Accumulate the given message body into the MAC's internal state.
+    pub fn update_body(&mut self, data: &[u8]) {
+        self.hasher.update(data);
+        let prev = self.digest();
+        let aes = Aes256Enc::new_from_slice(self.secret.as_ref()).unwrap();
+        let mut encrypted = self.digest().to_fixed_bytes();
+
+        aes.encrypt_padded::<NoPadding>(&mut encrypted, H128::len_bytes()).unwrap();
+        for i in 0..16 {
+            encrypted[i] ^= prev[i];
+        }
+        self.hasher.update(encrypted);
+    }
+
+    /// Produce a digest by finalizing the internal keccak256 hasher and returning the first 128
+    /// bits.
+    pub fn digest(&self) -> H128 {
+        H128::from_slice(&self.hasher.clone().finalize()[..16])
     }
 }
