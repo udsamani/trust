@@ -9,8 +9,13 @@ use ctr::Ctr64BE;
 use digest::{crypto_common::KeyIvInit, Digest};
 use educe::Educe;
 use ethereum_types::{H128, H256, H512 as PeerId};
-use secp256k1::{PublicKey, SecretKey, SECP256K1};
+use secp256k1::{
+    ecdsa::{RecoverableSignature, RecoveryId},
+    PublicKey, SecretKey, SECP256K1,
+};
 use sha2::Sha256;
+use sha3::Keccak256;
+use trust_rlp::Rlp;
 
 #[derive(Educe)]
 #[educe(Debug)]
@@ -30,11 +35,11 @@ pub struct ECIES {
     remote_nonce: Option<H256>,
 
     #[educe(Debug(ignore))]
-    incoming_aes: Option<Ctr64BE<Aes256>>,
+    inbound_aes: Option<Ctr64BE<Aes256>>,
     #[educe(Debug(ignore))]
-    outgoing_aes: Option<Ctr64BE<Aes256>>,
-    incoming_mac: Option<MAC>,
-    outgoing_mac: Option<MAC>,
+    outbound_aes: Option<Ctr64BE<Aes256>>,
+    inbound_mac: Option<MAC>,
+    outbound_mac: Option<MAC>,
 
     init_message: Option<Bytes>,
     remote_init_message: Option<Bytes>,
@@ -98,10 +103,10 @@ impl ECIES {
             remote_init_message: None,
             remote_id: Some(remote_id),
             body_size: None,
-            incoming_aes: None,
-            outgoing_aes: None,
-            outgoing_mac: None,
-            incoming_mac: None,
+            inbound_aes: None,
+            outbound_aes: None,
+            outbound_mac: None,
+            inbound_mac: None,
         })
     }
 
@@ -124,6 +129,104 @@ impl ECIES {
     pub fn body_len(&self) -> usize {
         let len = self.body_size.unwrap();
         (if len % 16 == 0 { len } else { (len / 16 + 1) * 16 }) + 16
+    }
+
+    fn parse_auth_unencrypted(&mut self, data: &[u8]) -> Result<(), ECIESError> {
+        let mut data = Rlp::new(data)?;
+
+        let sigdata = data.get_next::<[u8; 65]>()?.ok_or(ECIESError::InvalidAuthData)?;
+        let signature = RecoverableSignature::from_compact(
+            &sigdata[..64],
+            RecoveryId::from_i32(sigdata[64] as i32)?,
+        )?;
+        let remote_id = data.get_next::<[u8; 64]>()?.ok_or(ECIESError::InvalidAuthData)?.into();
+        self.remote_id = Some(remote_id);
+        self.remote_public_key = Some(id2pk(remote_id)?);
+        self.remote_nonce =
+            Some(data.get_next::<[u8; 32]>()?.ok_or(ECIESError::InvalidAuthData)?.into());
+
+        let x = ecdh_x(&self.remote_public_key.unwrap(), &self.secret_key);
+        self.remote_ephemeral_public_key = Some(SECP256K1.recover_ecdsa(
+            &secp256k1::Message::from_slice((x ^ self.remote_nonce.unwrap()).as_ref()).unwrap(),
+            &signature,
+        )?);
+        self.ephemeral_shared_secret =
+            Some(ecdh_x(&self.remote_ephemeral_public_key.unwrap(), &self.ephemeral_secret_key));
+
+        Ok(())
+    }
+
+    fn parse_ack_unencrypted(&mut self, data: &[u8]) -> Result<(), ECIESError> {
+        let mut data = Rlp::new(data)?;
+        self.remote_ephemeral_public_key =
+            Some(id2pk(data.get_next::<[u8; 64]>()?.ok_or(ECIESError::InvalidAckData)?.into())?);
+        self.remote_nonce =
+            Some(data.get_next::<[u8; 32]>()?.ok_or(ECIESError::InvalidAckData)?.into());
+
+        self.ephemeral_shared_secret =
+            Some(ecdh_x(&self.remote_ephemeral_public_key.unwrap(), &self.ephemeral_secret_key));
+        Ok(())
+    }
+
+    pub fn read_auth(&mut self, data: &mut [u8]) -> Result<(), ECIESError> {
+        self.remote_init_message = Some(Bytes::copy_from_slice(data));
+        let unencrypted = self.decrypt_message(data)?;
+        self.parse_auth_unencrypted(unencrypted)
+    }
+
+    pub fn read_ack(&mut self, data: &mut [u8]) -> Result<(), ECIESError> {
+        self.remote_init_message = Some(Bytes::copy_from_slice(data));
+        let unencrypted = self.decrypt_message(data)?;
+        self.parse_ack_unencrypted(unencrypted)?;
+        self.setup_frame(false);
+        Ok(())
+    }
+
+    fn setup_frame(&mut self, incoming: bool) {
+        let mut hasher = Keccak256::new();
+        for el in &if incoming {
+            [self.nonce, self.remote_nonce.unwrap()]
+        } else {
+            [self.remote_nonce.unwrap(), self.nonce]
+        } {
+            hasher.update(el);
+        }
+        let h_nonce = H256::from(hasher.finalize().as_ref());
+
+        let iv = H128::default();
+        let shared_secret: H256 = {
+            let mut hasher = Keccak256::new();
+            hasher.update(self.ephemeral_shared_secret.unwrap().0.as_ref());
+            hasher.update(h_nonce.0.as_ref());
+            H256::from(hasher.finalize().as_ref())
+        };
+
+        let aes_secret: H256 = {
+            let mut hasher = Keccak256::new();
+            hasher.update(self.ephemeral_shared_secret.unwrap().0.as_ref());
+            hasher.update(shared_secret.0.as_ref());
+            H256::from(hasher.finalize().as_ref())
+        };
+        self.inbound_aes =
+            Some(Ctr64BE::<Aes256>::new(aes_secret.0.as_ref().into(), iv.as_ref().into()));
+        self.outbound_aes =
+            Some(Ctr64BE::<Aes256>::new(aes_secret.0.as_ref().into(), iv.as_ref().into()));
+
+        let mac_secret: H256 = {
+            let mut hasher = Keccak256::new();
+            hasher.update(self.ephemeral_shared_secret.unwrap().0.as_ref());
+            hasher.update(aes_secret.0.as_ref());
+            H256::from(hasher.finalize().as_ref())
+        };
+        self.inbound_mac = Some(MAC::new(mac_secret));
+        self.inbound_mac.as_mut().unwrap().update((mac_secret ^ self.nonce).as_ref());
+        self.inbound_mac.as_mut().unwrap().update(self.remote_init_message.as_ref().unwrap());
+        self.outbound_mac = Some(MAC::new(mac_secret));
+        self.outbound_mac
+            .as_mut()
+            .unwrap()
+            .update((mac_secret ^ self.remote_nonce.unwrap()).as_ref());
+        self.outbound_mac.as_mut().unwrap().update(self.init_message.as_ref().unwrap());
     }
 
     fn decrypt_message<'a>(&self, data: &'a mut [u8]) -> Result<&'a mut [u8], ECIESError> {

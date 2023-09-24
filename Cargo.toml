@@ -2,6 +2,7 @@
 members = [
   "bin/trust",
   "crates/ecies",
+  "crates/rlp",
 ]
 default-members = ["bin/trust"]
 resolver = "2"
@@ -16,6 +17,9 @@ exclude = [".github/"]
 
 
 [workspace.dependencies]
+## Trust
+trust-rlp = { path = "./crates/rlp" }
+
 ## Tokio
 tokio-stream = "0.1.11"
 tokio = { version = "1.21", default-features = false }
@@ -39,6 +43,7 @@ thiserror = "1.0"
 rand = "0.8.5"
 bytes = "1.5.0"
 fixed-hash = { version = "0.8", default-features = false, features = ["rustc-hex"] }
+hex-literal = "0.4"
 
 ## Config
 toml = "0.7"

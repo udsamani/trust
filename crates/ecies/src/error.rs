@@ -20,6 +20,18 @@ pub enum ECIESError {
         len: usize,
     },
 
+    /// Error when decoding RLP data
+    #[error(transparent)]
+    RLPDecoding(trust_rlp::RlpDecodeError),
+
+    /// Error when parsing AUTH data
+    #[error("invalid auth data")]
+    InvalidAuthData,
+
+    /// Error when parsing ACK data
+    #[error("invalid ack data")]
+    InvalidAckData,
+
     /// Erroe when interacting with secp256k1
     #[error(transparent)]
     Sec256k1(secp256k1::Error),
@@ -34,5 +46,11 @@ impl From<secp256k1::Error> for ECIESError {
 impl From<std::io::Error> for ECIESError {
     fn from(source: std::io::Error) -> Self {
         ECIESError::IO(source).into()
+    }
+}
+
+impl From<trust_rlp::RlpDecodeError> for ECIESError {
+    fn from(source: trust_rlp::RlpDecodeError) -> Self {
+        ECIESError::RLPDecoding(source).into()
     }
 }
