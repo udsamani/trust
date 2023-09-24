@@ -1,10 +1,16 @@
-use crate::{mac::MAC, util::id2pk, ECIESError};
-use aes::Aes256;
+use crate::{
+    mac::MAC,
+    util::{hmac_sha256, id2pk, sha256},
+    ECIESError,
+};
+use aes::{cipher::StreamCipher, Aes128, Aes256};
 use bytes::Bytes;
 use ctr::Ctr64BE;
+use digest::{crypto_common::KeyIvInit, Digest};
 use educe::Educe;
-use ethereum_types::{H256, H512 as PeerId};
+use ethereum_types::{H128, H256, H512 as PeerId};
 use secp256k1::{PublicKey, SecretKey, SECP256K1};
+use sha2::Sha256;
 
 #[derive(Educe)]
 #[educe(Debug)]
@@ -34,6 +40,36 @@ pub struct ECIES {
     remote_init_message: Option<Bytes>,
 
     body_size: Option<usize>,
+}
+
+fn kdf(secret: H256, s1: &[u8], dest: &mut [u8]) {
+    // SEC/ISO/Shoup specify counter size SHOULD be equivalent
+    // to size of hash output, however, it also notes that
+    // the 4 bytes is okay. NIST specifies 4 bytes.
+    let mut ctr = 1_u32;
+    let mut written = 0_usize;
+    while written < dest.len() {
+        let mut hasher = Sha256::default();
+        let ctrs = [(ctr >> 24) as u8, (ctr >> 16) as u8, (ctr >> 8) as u8, ctr as u8];
+        hasher.update(ctrs);
+        hasher.update(secret.as_bytes());
+        hasher.update(s1);
+        let d = hasher.finalize();
+        dest[written..(written + 32)].copy_from_slice(&d);
+        written += 32;
+        ctr += 1;
+    }
+}
+
+fn ecdh_x(public_key: &PublicKey, secret_key: &SecretKey) -> H256 {
+    H256::from_slice(&secp256k1::ecdh::shared_secret_point(public_key, secret_key)[..32])
+}
+
+fn split_at_mut<T>(arr: &mut [T], idx: usize) -> Result<(&mut [T], &mut [T]), ECIESError> {
+    if idx > arr.len() {
+        return Err(ECIESError::OutOfBounds { idx, len: arr.len() }.into());
+    }
+    Ok(arr.split_at_mut(idx))
 }
 
 impl ECIES {
@@ -88,5 +124,32 @@ impl ECIES {
     pub fn body_len(&self) -> usize {
         let len = self.body_size.unwrap();
         (if len % 16 == 0 { len } else { (len / 16 + 1) * 16 }) + 16
+    }
+
+    fn decrypt_message<'a>(&self, data: &'a mut [u8]) -> Result<&'a mut [u8], ECIESError> {
+        let (auth_data, encrypted) = split_at_mut(data, 2)?;
+        let (pubkey_bytes, encrypted) = split_at_mut(encrypted, 65)?;
+        let public_key = PublicKey::from_slice(pubkey_bytes)?;
+        let (data_iv, tag_bytes) = split_at_mut(encrypted, encrypted.len() - 32)?;
+        let (iv, encrypted_data) = split_at_mut(data_iv, 16)?;
+        let tag = H256::from_slice(tag_bytes);
+
+        let x = ecdh_x(&public_key, &self.secret_key);
+        let mut key = [0u8; 32];
+        kdf(x, &[], &mut key);
+        let enc_key = H128::from_slice(&key[..16]);
+        let mac_key = sha256(&key[16..32]);
+
+        let check_tag = hmac_sha256(mac_key.as_ref(), &[iv, encrypted_data], auth_data);
+        if check_tag != tag {
+            return Err(ECIESError::TagCheckDecryptFailed.into());
+        }
+
+        let decrypted_data = encrypted_data;
+
+        let mut decryptor = Ctr64BE::<Aes128>::new(enc_key.as_ref().into(), (*iv).into());
+        decryptor.apply_keystream(decrypted_data);
+
+        Ok(decrypted_data)
     }
 }
