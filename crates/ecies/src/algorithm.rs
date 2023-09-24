@@ -1,9 +1,10 @@
 use crate::{
-    mac::MAC,
+    mac::{HeaderBytes, MAC},
     util::{hmac_sha256, id2pk, sha256},
     ECIESError,
 };
 use aes::{cipher::StreamCipher, Aes128, Aes256};
+use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{Bytes, BytesMut};
 use ctr::Ctr64BE;
 use digest::{crypto_common::KeyIvInit, Digest};
@@ -285,5 +286,44 @@ impl ECIES {
         out.extend_from_slice(iv.as_bytes());
         out.extend_from_slice(&encrypted);
         out.extend_from_slice(tag.as_ref());
+    }
+
+    pub fn read_body<'a>(&mut self, data: &'a mut [u8]) -> Result<&'a mut [u8], ECIESError> {
+        let (body, mac_bytes) = split_at_mut(data, data.len() - 16)?;
+        let mac = H128::from_slice(mac_bytes);
+        self.inbound_mac.as_mut().unwrap().update_body(body);
+        let check_mac = self.inbound_mac.as_mut().unwrap().digest();
+        if check_mac != mac {
+            return Err(ECIESError::TagCheckBodyFailed.into());
+        }
+
+        let size = self.body_size.unwrap();
+        self.body_size = None;
+        let ret = body;
+        self.inbound_aes.as_mut().unwrap().apply_keystream(ret);
+        Ok(split_at_mut(ret, size)?.0)
+    }
+
+    pub fn read_header(&mut self, data: &mut [u8]) -> Result<usize, ECIESError> {
+        let (header_bytes, mac_bytes) = split_at_mut(data, 16)?;
+        let header = HeaderBytes::from_mut_slice(header_bytes);
+        let mac = H128::from_slice(&mac_bytes[..16]);
+
+        self.inbound_mac.as_mut().unwrap().update_header(header);
+        let check_mac = self.inbound_mac.as_mut().unwrap().digest();
+        if check_mac != mac {
+            return Err(ECIESError::TagCheckHeaderFailed.into());
+        }
+
+        self.inbound_aes.as_mut().unwrap().apply_keystream(header);
+        if header.as_slice().len() < 3 {
+            return Err(ECIESError::InvalidHeader.into());
+        }
+
+        let body_size = usize::try_from(header.as_slice().read_uint::<BigEndian>(3)?)?;
+
+        self.body_size = Some(body_size);
+
+        Ok(self.body_size.unwrap())
     }
 }
