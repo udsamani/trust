@@ -1,0 +1,3 @@
+[package]
+name = "trust-ecies"
+version.workspace = true
