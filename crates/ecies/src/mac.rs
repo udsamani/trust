@@ -8,6 +8,10 @@ pub struct MAC {
 }
 
 impl MAC {
+    pub fn update(&mut self, data: &[u8]) {
+        self.hasher.update(data)
+    }
+
     pub fn new(secret: H256) -> Self {
         Self { secret, hasher: Keccak256::new() }
     }

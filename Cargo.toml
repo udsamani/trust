@@ -18,7 +18,7 @@ exclude = [".github/"]
 
 [workspace.dependencies]
 ## Trust
-trust = { path = "./crates/rlp" }
+trust-rlp = { path = "./crates/rlp" }
 
 ## Tokio
 tokio-stream = "0.1.11"

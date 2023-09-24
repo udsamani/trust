@@ -15,6 +15,7 @@ tokio-util = { workspace = true, features = ["codec"] }
 bytes.workspace = true
 educe = "0.4.19"
 ethereum-types.workspace = true
+trust-rlp.workspace = true
 
 ## Crypto
 secp256k1 = { workspace = true, features = ["global-context", "rand-std", "recovery"]}
