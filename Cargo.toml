@@ -1,0 +1,16 @@
+[workspace]
+members = [
+  "crates/ecies",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+rust-versio = "1.70"
+license = "MIT"
+repository = "https://github.com/udsamani/trust"
+exclude = [".github/"]
+
+
+[workspace.dependencies]
+toml = "0.7"
